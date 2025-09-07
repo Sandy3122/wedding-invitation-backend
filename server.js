@@ -266,6 +266,7 @@ app.use('/api/media', require('./routes/media'));
 app.use('/api/reminders', require('./routes/reminders'));
 app.use('/api/events', require('./routes/events'));
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/guests', require('./routes/guests'));
 
 // Error handling
 app.use((err, req, res, next) => {

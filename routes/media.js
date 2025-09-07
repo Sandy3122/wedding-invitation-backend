@@ -59,8 +59,41 @@ router.post('/upload', upload.single('media'), async (req, res) => {
       expires: '03-09-2030', // Set an expiration date for the URL
     });
 
+    // Gather uploader info from request body
+    const uploaderName = req.body && req.body.uploaderName ? String(req.body.uploaderName).trim() : '';
+    const uploaderPhone = req.body && req.body.uploaderPhone ? String(req.body.uploaderPhone).trim() : '';
+    const deviceId = req.body && req.body.deviceId ? String(req.body.deviceId).trim() : '';
+    const category = (req.body && req.body.category ? String(req.body.category) : 'uncategorized');
+
+    // Upsert guest profile keyed by deviceId if provided
+    if (deviceId) {
+      const guestRef = db.collection('guests').doc(deviceId);
+      const guestSnap = await guestRef.get();
+      const now = new Date();
+      if (!guestSnap.exists) {
+        await guestRef.set({
+          deviceId,
+          name: uploaderName || 'Guest',
+          phoneNumber: uploaderPhone || '',
+          createdAt: now,
+          lastActive: now,
+          uploadCount: 1,
+        });
+      } else {
+        const prev = guestSnap.data() || {};
+        await guestRef.set({
+          deviceId,
+          name: uploaderName || prev.name || 'Guest',
+          phoneNumber: uploaderPhone || prev.phoneNumber || '',
+          lastActive: now,
+          uploadCount: (prev.uploadCount || 0) + 1,
+          updatedAt: now,
+        }, { merge: true });
+      }
+    }
+
     // Create a document in Firestore with the media information
-    const docRef = await db.collection('media').add({
+    const docData = {
       fileName: file.originalname,
       storageUrl: url,
       mimeType: file.mimetype,
@@ -68,9 +101,13 @@ router.post('/upload', upload.single('media'), async (req, res) => {
       uploadDate: new Date(),
       isApproved: true,
       likes: 0,
-      // New: persist category if provided
-      category: (req.body && req.body.category ? String(req.body.category) : 'uncategorized')
-    });
+      category,
+    };
+    if (uploaderName) docData.uploaderName = uploaderName;
+    if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
+    if (deviceId) docData.deviceId = deviceId;
+
+    const docRef = await db.collection('media').add(docData);
 
     res.status(200).json({
       success: true,
@@ -201,9 +238,10 @@ router.delete('/:id', async (req, res) => {
     const doc = await db.collection('media').doc(req.params.id).get();
     
     if (!doc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Media not found'
+      console.log('Delete media: document not found, treating as already deleted', req.params.id)
+      return res.status(200).json({
+        success: true,
+        message: 'Media already deleted (not found)'
       });
     }
 
