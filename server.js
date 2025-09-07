@@ -268,6 +268,7 @@ app.use('/api/events', require('./routes/events'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/sections', require('./routes/sections'));
 app.use('/api/guests', require('./routes/guests'));
+app.use('/api/settings', require('./routes/settings'));
 
 // Error handling
 app.use((err, req, res, next) => {
