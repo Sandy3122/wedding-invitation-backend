@@ -1,0 +1,43 @@
+{
+  "name": "wedding-backend",
+  "version": "1.0.0",
+  "description": "Backend API for AI-powered wedding invitation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "seed:admin": "node scripts/seedAdmin.js",
+    "verify:admin": "node scripts/verifyAdmin.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "wedding",
+    "api",
+    "firebase",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "firebase-admin": "^13.5.0",
+    "formidable": "^3.5.4",
+    "formidable-serverless": "^1.1.1",
+    "multer": "^1.4.5-lts.1",
+    "nodemon": "^3.1.10",
+    "path": "^0.12.7",
+    "sharp": "^0.34.3",
+    "uuid": "^8.3.2"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "config/serviceAccountKey.json",
+      "public/*",
+      "node_modules/*"
+    ]
+  }
+}
