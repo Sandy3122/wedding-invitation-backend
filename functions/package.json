@@ -1,0 +1,33 @@
+{
+  "name": "functions",
+  "description": "Wedding Backend API - Firebase Functions",
+  "scripts": {
+    "lint": "eslint .",
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^13.5.0",
+    "firebase-functions": "^6.1.0",
+    "express": "^5.1.0",
+    "cors": "^2.8.5",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^8.3.2",
+    "sharp": "^0.34.3",
+    "formidable": "^3.5.4",
+    "formidable-serverless": "^1.1.1",
+    "cookie-parser": "^1.4.7"
+  },
+  "devDependencies": {
+    "eslint": "^8.15.0",
+    "eslint-config-google": "^0.14.0"
+  },
+  "private": true
+}
