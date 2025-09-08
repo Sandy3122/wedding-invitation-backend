@@ -1,9 +1,9 @@
 const express = require('express');
-const multer = require('multer');
+const formidable = require('formidable-serverless');
 const { v4: uuidv4 } = require('uuid');
-const sharp = require('sharp');
 const admin = require('firebase-admin');
 const path = require('path');
+const fs = require('fs');
 
 const router = express.Router();
 
@@ -11,120 +11,201 @@ const router = express.Router();
 const getDb = () => admin.firestore();
 const getBucket = () => admin.storage().bucket();
 
-// Configure multer for memory storage
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
-  },
-});
+// File upload helper function based on your working implementation
+async function uploadFile(file, folder, fileName, fileType) {
+    try {
+        console.log('File object:', file);
+        console.log('File path:', file.path);
+
+        if (!file.path) {
+            throw new Error("File path is undefined. Ensure the file is correctly parsed.");
+        }
+
+        const filePath = `${folder}/${fileName}`;
+
+        // Upload the file to Firebase Storage with appropriate metadata
+        const [uploadedFile] = await getBucket().upload(file.path, {
+            destination: filePath,
+            metadata: {
+                contentType: file.type,
+                metadata: {
+                    // Set Content-Disposition to 'inline' to open in the browser
+                    'Content-Disposition': `inline; filename="${fileName}"`,
+                },
+            },
+        });
+
+        // Generate a signed URL for accessing the file
+        const [signedUrl] = await uploadedFile.getSignedUrl({
+            action: 'read',
+            expires: Date.now() + 20 * 365 * 24 * 60 * 60 * 1000, // 20 years expiration
+        });
+
+        console.log('File uploaded successfully:', signedUrl);
+        return signedUrl;
+    } catch (error) {
+        console.error("Error uploading file:", error);
+        throw new Error(`Error uploading file: ${error.message}`);
+    }
+}
+
+const MAX_FILE_SIZE_MB = 50;
+const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 // Upload media to Firebase Storage and save metadata to Firestore
-router.post('/upload', upload.single('media'), async (req, res) => {
-  try {
-    const db = getDb();
-    const bucket = getBucket();
-    
-    // Check if Firebase Storage is available
-    if (!bucket) {
-      return res.status(500).json({
-        success: false,
-        message: 'Firebase Storage is not configured. Please check your environment variables and Firebase setup.',
-        error: 'Storage bucket not available'
-      });
-    }
+router.post('/upload', async (req, res) => {
+    try {
+        console.log('Starting media upload process...');
+        
+        const db = getDb();
+        const bucket = getBucket();
+        
+        // Check if Firebase Storage is available
+        if (!bucket) {
+            return res.status(500).json({
+                success: false,
+                message: 'Firebase Storage is not configured. Please check your environment variables and Firebase setup.',
+                error: 'Storage bucket not available'
+            });
+        }
 
-    // Check if a file was uploaded
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: 'No file uploaded'
-      });
-    }
+        // Use formidable-serverless like in your working implementation
+        const form = new formidable.IncomingForm();
+        form.maxFileSize = MAX_FILE_SIZE;
+        form.multiples = false; // Single file upload
 
-    const file = req.file;
-    const fileExtension = path.extname(file.originalname);
-    const fileName = `${uuidv4()}${fileExtension}`;
-    const fileRef = bucket.file(fileName);
+        form.parse(req, async (err, fields, files) => {
+            if (err) {
+                if (err.message.includes("maxFileSize")) {
+                    return res.status(400).json({ 
+                        success: false,
+                        message: `File size limit exceeded (max ${MAX_FILE_SIZE_MB} MB)` 
+                    });
+                }
+                console.error("Error parsing form:", err);
+                return res.status(400).json({ 
+                    success: false,
+                    message: "Error parsing form data" 
+                });
+            }
 
-    // Upload the file to Firebase Storage
-    await fileRef.save(file.buffer, {
-      metadata: {
-        contentType: file.mimetype,
-      },
-    });
+            console.log('Form parsed successfully');
+            console.log('Fields:', fields);
+            console.log('Files:', files);
 
-    const [url] = await fileRef.getSignedUrl({
-      action: 'read',
-      expires: '03-09-2030', // Set an expiration date for the URL
-    });
+            // Check if a file was uploaded
+            if (!files.media) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No file uploaded with name "media"'
+                });
+            }
 
-    // Gather uploader info from request body
-    const uploaderName = req.body && req.body.uploaderName ? String(req.body.uploaderName).trim() : '';
-    const uploaderPhone = req.body && req.body.uploaderPhone ? String(req.body.uploaderPhone).trim() : '';
-    const deviceId = req.body && req.body.deviceId ? String(req.body.deviceId).trim() : '';
-    const category = (req.body && req.body.category ? String(req.body.category) : 'uncategorized');
+            const file = Array.isArray(files.media) ? files.media[0] : files.media;
+            console.log('File details:', {
+                name: file.name,
+                type: file.type,
+                size: file.size,
+                path: file.path
+            });
 
-    // Upsert guest profile keyed by deviceId if provided
-    if (deviceId) {
-      const guestRef = db.collection('guests').doc(deviceId);
-      const guestSnap = await guestRef.get();
-      const now = new Date();
-      if (!guestSnap.exists) {
-        await guestRef.set({
-          deviceId,
-          name: uploaderName || 'Guest',
-          phoneNumber: uploaderPhone || '',
-          createdAt: now,
-          lastActive: now,
-          uploadCount: 1,
+            try {
+                // Generate unique filename
+                const fileExtension = path.extname(file.name || '');
+                const fileName = `${uuidv4()}${fileExtension}`;
+
+                // Upload file using the working approach
+                const signedUrl = await uploadFile(file, 'wedding-media', fileName, file.type);
+
+                // Gather uploader info from form fields
+                const uploaderName = fields.uploaderName ? String(fields.uploaderName).trim() : '';
+                const uploaderPhone = fields.uploaderPhone ? String(fields.uploaderPhone).trim() : '';
+                const deviceId = fields.deviceId ? String(fields.deviceId).trim() : '';
+                const category = fields.category ? String(fields.category) : 'uncategorized';
+
+                console.log('Saving to Firestore...');
+                // Upsert guest profile keyed by deviceId if provided
+                if (deviceId) {
+                    const guestRef = db.collection('guests').doc(deviceId);
+                    const guestSnap = await guestRef.get();
+                    const now = new Date();
+                    if (!guestSnap.exists) {
+                        await guestRef.set({
+                            deviceId,
+                            name: uploaderName || 'Guest',
+                            phoneNumber: uploaderPhone || '',
+                            createdAt: now,
+                            lastActive: now,
+                            uploadCount: 1,
+                        });
+                    } else {
+                        const prev = guestSnap.data() || {};
+                        await guestRef.set({
+                            deviceId,
+                            name: uploaderName || prev.name || 'Guest',
+                            phoneNumber: uploaderPhone || prev.phoneNumber || '',
+                            lastActive: now,
+                            uploadCount: (prev.uploadCount || 0) + 1,
+                            updatedAt: now,
+                        }, { merge: true });
+                    }
+                }
+
+                // Create a document in Firestore with the media information
+                const docData = {
+                    fileName: file.name || 'unknown',
+                    storageUrl: signedUrl,
+                    mimeType: file.type || 'application/octet-stream',
+                    size: file.size,
+                    uploadDate: new Date(),
+                    isApproved: true,
+                    likes: 0,
+                    category,
+                };
+                if (uploaderName) docData.uploaderName = uploaderName;
+                if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
+                if (deviceId) docData.deviceId = deviceId;
+
+                const docRef = await db.collection('media').add(docData);
+
+                console.log('Upload completed successfully');
+                res.status(200).json({
+                    success: true,
+                    message: 'Media uploaded successfully!',
+                    data: {
+                        downloadUrl: signedUrl,
+                        docId: docRef.id
+                    }
+                });
+
+                // Clean up temporary file
+                try {
+                    if (file.path && fs.existsSync(file.path)) {
+                        fs.unlinkSync(file.path);
+                        console.log('Temporary file cleaned up');
+                    }
+                } catch (cleanupError) {
+                    console.log('Cleanup error (non-critical):', cleanupError.message);
+                }
+
+            } catch (uploadError) {
+                console.error('Upload error:', uploadError);
+                res.status(500).json({
+                    success: false,
+                    message: 'Error uploading media',
+                    error: uploadError.message
+                });
+            }
         });
-      } else {
-        const prev = guestSnap.data() || {};
-        await guestRef.set({
-          deviceId,
-          name: uploaderName || prev.name || 'Guest',
-          phoneNumber: uploaderPhone || prev.phoneNumber || '',
-          lastActive: now,
-          uploadCount: (prev.uploadCount || 0) + 1,
-          updatedAt: now,
-        }, { merge: true });
-      }
+
+    } catch (error) {
+        console.error('General error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error processing upload request',
+            error: error.message
+        });
     }
-
-    // Create a document in Firestore with the media information
-    const docData = {
-      fileName: file.originalname,
-      storageUrl: url,
-      mimeType: file.mimetype,
-      size: file.size,
-      uploadDate: new Date(),
-      isApproved: true,
-      likes: 0,
-      category,
-    };
-    if (uploaderName) docData.uploaderName = uploaderName;
-    if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
-    if (deviceId) docData.deviceId = deviceId;
-
-    const docRef = await db.collection('media').add(docData);
-
-    res.status(200).json({
-      success: true,
-      message: 'Media uploaded successfully!',
-      data: {
-        downloadUrl: url,
-        docId: docRef.id
-      }
-    });
-  } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error uploading media',
-      error: error.message
-    });
-  }
 });
 
 // Get all media

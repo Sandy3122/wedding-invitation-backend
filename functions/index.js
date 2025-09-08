@@ -7,8 +7,30 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const cookieParser = require('cookie-parser');
 
-// Initialize Firebase Admin SDK
-admin.initializeApp();
+// Load the Firebase service account key with error handling
+let serviceAccount;
+try {
+  serviceAccount = require('./serviceAccountKey.json');
+  console.log('Service account key loaded successfully');
+} catch (error) {
+  console.error('Failed to load service account key:', error.message);
+  process.exit(1);
+}
+
+// Initialize Firebase Admin SDK with better error handling
+if (!admin.apps.length) {
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: serviceAccount.project_id, // Use from service account
+      storageBucket: 'gs://safipraneeth-2c6f8.firebasestorage.app', // Use correct bucket format
+    });
+    console.log('Firebase Admin SDK initialized and connected successfully!');
+  } catch (error) {
+    console.error('Firebase initialization failed:', error.message);
+    process.exit(1);
+  }
+}
 
 // Initialize Express app
 const app = express();
@@ -29,6 +51,13 @@ app.use((req, res, next) => {
 const db = admin.firestore();
 const storage = admin.storage();
 const bucket = storage.bucket();
+
+// Test Firebase connection
+db.collection('test').limit(1).get()
+  .then(() => console.log('Firestore connection verified'))
+  .catch(error => {
+    console.error('Firestore connection failed:', error.message);
+  });
 
 // Configure Multer for file uploads
 const upload = multer({

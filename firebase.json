@@ -1,6 +1,8 @@
 {
   "functions": {
     "source": "functions",
-    "runtime": "nodejs20"
+    "runtime": "nodejs20",
+    "timeout": "540s",
+    "memory": "1GB"
   }
 }
