@@ -67,35 +67,82 @@ router.post('/', async (req, res) => {
 });
 
 // Get all wishes
+// router.get('/', async (req, res) => {
+//   try {
+//     const db = getDb();
+//     const { limit = 50, offset = 0, approved = true } = req.query;
+    
+//     let query = db.collection('wishes');
+    
+//     if (approved === 'true') {
+//       query = query.where('isApproved', '==', true);
+//     }
+    
+//     const snapshot = await query
+//       .orderBy('createdAt', 'desc')
+//       .limit(parseInt(limit))
+//       .offset(parseInt(offset))
+//       .get();
+
+//     const wishes = [];
+//     snapshot.forEach(doc => {
+//       wishes.push({
+//         id: doc.id,
+//         ...doc.data()
+//       });
+//     });
+
+//     res.json({
+//       success: true,
+//       data: wishes,
+//       count: wishes.length
+//     });
+//   } catch (error) {
+//     console.error('Get wishes error:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to fetch wishes',
+//       error: error.message
+//     });
+//   }
+// });
+
 router.get('/', async (req, res) => {
   try {
     const db = getDb();
-    const { limit = 50, offset = 0, approved = true } = req.query;
+    const { limit = 50, lastVisible = null, approved = true } = req.query;
     
     let query = db.collection('wishes');
-    
+
+    // Filter only approved wishes if specified
     if (approved === 'true') {
       query = query.where('isApproved', '==', true);
     }
-    
-    const snapshot = await query
-      .orderBy('createdAt', 'desc')
-      .limit(parseInt(limit))
-      .offset(parseInt(offset))
-      .get();
 
-    const wishes = [];
-    snapshot.forEach(doc => {
-      wishes.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
+    // Base query with ordering and limit
+    query = query.orderBy('likes', 'desc').orderBy('createdAt', 'desc').limit(parseInt(limit));
+
+    // If lastVisible is provided, use it for pagination
+    if (lastVisible) {
+      const lastDoc = await db.collection('wishes').doc(lastVisible).get();
+      if (lastDoc.exists) {
+        query = query.startAfter(lastDoc);
+      }
+    }
+
+    const snapshot = await query.get();
+
+    const wishes = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
 
     res.json({
       success: true,
       data: wishes,
-      count: wishes.length
+      count: wishes.length,
+      // Return the last document ID for the next call
+      lastVisible: snapshot.docs.length ? snapshot.docs[snapshot.docs.length - 1].id : null
     });
   } catch (error) {
     console.error('Get wishes error:', error);
@@ -106,6 +153,7 @@ router.get('/', async (req, res) => {
     });
   }
 });
+
 
 // Get single wish
 router.get('/:id', async (req, res) => {

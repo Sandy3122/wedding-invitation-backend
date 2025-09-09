@@ -128,30 +128,73 @@ router.post('/upload', upload.single('media'), async (req, res) => {
 });
 
 // Get all media
+// router.get('/', async (req, res) => {
+//   try {
+//     const db = getDb();
+//     const { limit = 50, offset = 0 } = req.query;
+    
+//     const snapshot = await db.collection('media')
+//     .orderBy('uploadDate', 'desc')
+//       .limit(parseInt(limit))
+//       .offset(parseInt(offset))
+//       .get();
+
+//     const media = [];
+//     snapshot.forEach(doc => {
+//       media.push({
+//         id: doc.id,
+//         ...doc.data()
+//       });
+//     });
+
+//     res.json({
+//       success: true,
+//       data: media,
+//       count: media.length
+//     });
+//   } catch (error) {
+//     console.error('Get media error:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to fetch media',
+//       error: error.message
+//     });
+//   }
+// });
+
+
 router.get('/', async (req, res) => {
   try {
     const db = getDb();
-    const { limit = 50, offset = 0 } = req.query;
-    
-    const snapshot = await db.collection('media')
-      .where('isApproved', '==', true)
-      .orderBy('uploadDate', 'desc')
-      .limit(parseInt(limit))
-      .offset(parseInt(offset))
-      .get();
+    const { limit = 50, lastVisible } = req.query; // lastVisible = last document's uploadDate or ID
 
-    const media = [];
-    snapshot.forEach(doc => {
-      media.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
+    let query = db.collection('media')
+      .where('isApproved', '==', true)
+      .orderBy('likes', 'desc')
+      .orderBy('uploadDate', 'desc')
+      .limit(parseInt(limit));
+
+    if (lastVisible) {
+      const lastDoc = await db.collection('media').doc(lastVisible).get();
+      if (lastDoc.exists) {
+        query = query.startAfter(lastDoc);
+      }
+    }
+
+    const snapshot = await query.get();
+
+    const media = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
 
     res.json({
       success: true,
       data: media,
-      count: media.length
+      count: media.length,
+      lastVisible: snapshot.docs.length
+        ? snapshot.docs[snapshot.docs.length - 1].id
+        : null
     });
   } catch (error) {
     console.error('Get media error:', error);
@@ -162,6 +205,7 @@ router.get('/', async (req, res) => {
     });
   }
 });
+
 
 // Get single media item
 router.get('/:id', async (req, res) => {
