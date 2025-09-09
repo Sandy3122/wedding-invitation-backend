@@ -72,15 +72,12 @@ router.get('/', async (req, res) => {
     const db = getDb();
     const { limit = 50, lastVisible = null, approved = true } = req.query;
     
-    let query = db.collection('wishes');
+    let query = db.collection('wishes')
+    .where('isApproved', '==', true)
+    .orderBy('likes', 'desc')
+    .orderBy('createdAt', 'desc')
+    .limit(parseInt(limit));
 
-    // Filter only approved wishes if specified
-    if (approved === 'true') {
-      query = query.where('isApproved', '==', true);
-    }
-
-    // Base query with ordering and limit
-    query = query.orderBy('likes', 'desc').orderBy('createdAt', 'desc').limit(parseInt(limit));
 
     // If lastVisible is provided, use it for pagination
     if (lastVisible) {
