@@ -1,7 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const admin = require('firebase-admin');
-// Helper function to get Firestore instance
+// Helper functions to get Firestore and Storage instances
 const getDb = () => admin.firestore();
 
 const router = express.Router();
@@ -79,6 +79,7 @@ router.get('/', async (req, res) => {
     }
     
     const snapshot = await query
+      .where('isApproved', '==', true)
       .orderBy('createdAt', 'desc')
       .limit(parseInt(limit))
       .offset(parseInt(offset))

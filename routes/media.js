@@ -134,6 +134,7 @@ router.get('/', async (req, res) => {
     const { limit = 50, offset = 0 } = req.query;
     
     const snapshot = await db.collection('media')
+      .where('isApproved', '==', true)
       .orderBy('uploadDate', 'desc')
       .limit(parseInt(limit))
       .offset(parseInt(offset))

@@ -309,4 +309,76 @@ router.get('/stats/overview', async (req, res) => {
   }
 });
 
+// Save artwork for a wish
+router.post('/:id/artwork', async (req, res) => {
+  try {
+    const db = getDb();
+    const wishId = req.params.id;
+    const { 
+      artworkUrl,
+      enhancedPrompt,
+      originalPrompt,
+      style,
+      coupleName,
+      meta
+    } = req.body;
+
+    // Validate required fields
+    if (!artworkUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'Artwork URL is required'
+      });
+    }
+
+    // Check if wish exists
+    const wishDoc = await db.collection('wishes').doc(wishId).get();
+    if (!wishDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Wish not found'
+      });
+    }
+
+    // Create artwork data
+    const artworkData = {
+      id: uuidv4(),
+      wishId: wishId,
+      artworkUrl: artworkUrl,
+      enhancedPrompt: enhancedPrompt || '',
+      originalPrompt: originalPrompt || '',
+      style: style || 'cartoon',
+      coupleName: coupleName || 'Safalya & Praneet',
+      meta: meta || {},
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    // Save artwork to its own collection
+    await db.collection('artworks').doc(artworkData.id).set(artworkData);
+
+    // Update the wish with artwork URL
+    await db.collection('wishes').doc(wishId).update({
+      artworkUrl: artworkUrl,
+      artworkPrompt: enhancedPrompt || originalPrompt || '',
+      updatedAt: new Date()
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Artwork saved successfully',
+      data: artworkData
+    });
+
+  } catch (error) {
+    console.error('Save artwork error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save artwork',
+      error: error.message
+    });
+  }
+});
+
+
 module.exports = router;
