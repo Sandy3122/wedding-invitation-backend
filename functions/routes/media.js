@@ -28,6 +28,7 @@ async function uploadFile(file, folder, fileName, fileType) {
             destination: filePath,
             metadata: {
                 contentType: file.type,
+                cacheControl: 'public, max-age=31536000, immutable',
                 metadata: {
                     // Set Content-Disposition to 'inline' to open in the browser
                     'Content-Disposition': `inline; filename="${fileName}"`,
