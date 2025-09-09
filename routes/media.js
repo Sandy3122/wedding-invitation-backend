@@ -51,6 +51,10 @@ router.post('/upload', upload.single('media'), async (req, res) => {
     await fileRef.save(file.buffer, {
       metadata: {
         contentType: file.mimetype,
+        cacheControl: 'public, max-age=31536000, immutable',
+        metadata: {
+          'Content-Disposition': `inline; filename="${fileName}"`,
+        },
       },
     });
 
