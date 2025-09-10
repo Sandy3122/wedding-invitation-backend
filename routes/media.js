@@ -173,7 +173,6 @@ router.get('/', async (req, res) => {
     const { limit = 50, lastVisible } = req.query; // lastVisible = last document's uploadDate or ID
 
     let query = db.collection('media')
-      .where('isApproved', '==', true)
       .orderBy('likes', 'desc')
       .orderBy('uploadDate', 'desc')
       .limit(parseInt(limit));

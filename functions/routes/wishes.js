@@ -73,7 +73,6 @@ router.get('/', async (req, res) => {
     const { limit = 50, lastVisible = null, approved = true } = req.query;
     
     let query = db.collection('wishes')
-    .where('isApproved', '==', true)
     .orderBy('likes', 'desc')
     .orderBy('createdAt', 'desc')
     .limit(parseInt(limit));

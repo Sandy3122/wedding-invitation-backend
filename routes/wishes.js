@@ -123,7 +123,6 @@ router.get('/', async (req, res) => {
     // query = query.orderBy('likes', 'desc').orderBy('createdAt', 'desc').limit(parseInt(limit));
 
     let query = db.collection('wishes')
-    .where('isApproved', '==', true)
     .orderBy('likes', 'desc')
     .orderBy('createdAt', 'desc')
     .limit(parseInt(limit));
