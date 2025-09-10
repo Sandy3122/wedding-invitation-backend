@@ -19,6 +19,22 @@ const upload = multer({
   },
 });
 
+// Helper function to determine folder structure based on upload source and category
+function getStorageFolder(deviceId, category) {
+  // If deviceId is 'admin_portal', it's from admin panel - use category-based folder
+  if (deviceId === 'admin_portal') {
+    return `admin-uploads/${category.toLowerCase()}`;
+  }
+  
+  // If category is 'captureYourMoments', it's from capture moments page
+  if (category === 'captureYourMoments') {
+    return 'capturedMoments';
+  }
+  
+  // Default folder for other uploads
+  return 'general-uploads';
+}
+
 // Upload media to Firebase Storage and save metadata to Firestore
 router.post('/upload', upload.single('media'), async (req, res) => {
   try {
@@ -45,7 +61,17 @@ router.post('/upload', upload.single('media'), async (req, res) => {
     const file = req.file;
     const fileExtension = path.extname(file.originalname);
     const fileName = `${uuidv4()}${fileExtension}`;
-    const fileRef = bucket.file(fileName);
+    
+    // Gather uploader info from request body
+    const uploaderName = req.body && req.body.uploaderName ? String(req.body.uploaderName).trim() : '';
+    const uploaderPhone = req.body && req.body.uploaderPhone ? String(req.body.uploaderPhone).trim() : '';
+    const deviceId = req.body && req.body.deviceId ? String(req.body.deviceId).trim() : '';
+    const category = (req.body && req.body.category ? String(req.body.category) : 'uncategorized');
+    
+    // Determine the storage folder based on upload source and category
+    const storageFolder = getStorageFolder(deviceId, category);
+    const fullPath = `${storageFolder}/${fileName}`;
+    const fileRef = bucket.file(fullPath);
 
     // Upload the file to Firebase Storage
     await fileRef.save(file.buffer, {
@@ -62,12 +88,6 @@ router.post('/upload', upload.single('media'), async (req, res) => {
       action: 'read',
       expires: '03-09-2030', // Set an expiration date for the URL
     });
-
-    // Gather uploader info from request body
-    const uploaderName = req.body && req.body.uploaderName ? String(req.body.uploaderName).trim() : '';
-    const uploaderPhone = req.body && req.body.uploaderPhone ? String(req.body.uploaderPhone).trim() : '';
-    const deviceId = req.body && req.body.deviceId ? String(req.body.deviceId).trim() : '';
-    const category = (req.body && req.body.category ? String(req.body.category) : 'uncategorized');
 
     // Upsert guest profile keyed by deviceId if provided
     if (deviceId) {
@@ -106,6 +126,7 @@ router.post('/upload', upload.single('media'), async (req, res) => {
       isApproved: true,
       likes: 0,
       category,
+      storageFolder, // Add storage folder info for reference
     };
     if (uploaderName) docData.uploaderName = uploaderName;
     if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
@@ -118,7 +139,8 @@ router.post('/upload', upload.single('media'), async (req, res) => {
       message: 'Media uploaded successfully!',
       data: {
         downloadUrl: url,
-        docId: docRef.id
+        docId: docRef.id,
+        storageFolder
       }
     });
   } catch (error) {
@@ -298,8 +320,17 @@ router.delete('/:id', async (req, res) => {
     // Delete from Firebase Storage if URL exists
     if (mediaData.storageUrl && bucket) {
       try {
-        const fileName = mediaData.storageUrl.split('/').pop().split('?')[0];
-        await bucket.file(fileName).delete();
+        // Extract the full path from the storage URL for proper deletion
+        const url = new URL(mediaData.storageUrl);
+        const pathMatch = url.pathname.match(/\/o\/(.+?)\?/);
+        if (pathMatch) {
+          const fullPath = decodeURIComponent(pathMatch[1]);
+          await bucket.file(fullPath).delete();
+        } else {
+          // Fallback to old method if URL format is different
+          const fileName = mediaData.storageUrl.split('/').pop().split('?')[0];
+          await bucket.file(fileName).delete();
+        }
       } catch (storageError) {
         console.log('Storage deletion error (continuing):', storageError.message);
       }

@@ -11,6 +11,22 @@ const router = express.Router();
 const getDb = () => admin.firestore();
 const getBucket = () => admin.storage().bucket();
 
+// Helper function to determine folder structure based on upload source and category
+function getStorageFolder(deviceId, category) {
+  // If deviceId is 'admin_portal', it's from admin panel - use category-based folder
+  if (deviceId === 'admin_portal') {
+    return `admin-uploads/${category.toLowerCase()}`;
+  }
+  
+  // If category is 'captureYourMoments', it's from capture moments page
+  if (category === 'captureYourMoments') {
+    return 'capturedMoments';
+  }
+  
+  // Default folder for other uploads
+  return 'general-uploads';
+}
+
 // File upload helper function based on your working implementation
 async function uploadFile(file, folder, fileName, fileType) {
     try {
@@ -115,14 +131,17 @@ router.post('/upload', async (req, res) => {
                 const fileExtension = path.extname(file.name || '');
                 const fileName = `${uuidv4()}${fileExtension}`;
 
-                // Upload file using the working approach
-                const signedUrl = await uploadFile(file, 'wedding-media', fileName, file.type);
-
                 // Gather uploader info from form fields
                 const uploaderName = fields.uploaderName ? String(fields.uploaderName).trim() : '';
                 const uploaderPhone = fields.uploaderPhone ? String(fields.uploaderPhone).trim() : '';
                 const deviceId = fields.deviceId ? String(fields.deviceId).trim() : '';
                 const category = fields.category ? String(fields.category) : 'uncategorized';
+                
+                // Determine the storage folder based on upload source and category
+                const storageFolder = getStorageFolder(deviceId, category);
+
+                // Upload file using the working approach
+                const signedUrl = await uploadFile(file, storageFolder, fileName, file.type);
 
                 console.log('Saving to Firestore...');
                 // Upsert guest profile keyed by deviceId if provided
@@ -162,6 +181,7 @@ router.post('/upload', async (req, res) => {
                     isApproved: true,
                     likes: 0,
                     category,
+                    storageFolder, // Add storage folder info for reference
                 };
                 if (uploaderName) docData.uploaderName = uploaderName;
                 if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
@@ -175,7 +195,8 @@ router.post('/upload', async (req, res) => {
                     message: 'Media uploaded successfully!',
                     data: {
                         downloadUrl: signedUrl,
-                        docId: docRef.id
+                        docId: docRef.id,
+                        storageFolder
                     }
                 });
 
@@ -340,8 +361,17 @@ router.delete('/:id', async (req, res) => {
     // Delete from Firebase Storage if URL exists
     if (mediaData.storageUrl && bucket) {
       try {
-        const fileName = mediaData.storageUrl.split('/').pop().split('?')[0];
-        await bucket.file(fileName).delete();
+        // Extract the full path from the storage URL for proper deletion
+        const url = new URL(mediaData.storageUrl);
+        const pathMatch = url.pathname.match(/\/o\/(.+?)\?/);
+        if (pathMatch) {
+          const fullPath = decodeURIComponent(pathMatch[1]);
+          await bucket.file(fullPath).delete();
+        } else {
+          // Fallback to old method if URL format is different
+          const fileName = mediaData.storageUrl.split('/').pop().split('?')[0];
+          await bucket.file(fileName).delete();
+        }
       } catch (storageError) {
         console.log('Storage deletion error (continuing):', storageError.message);
       }
