@@ -119,6 +119,7 @@ router.post('/upload', upload.single('media'), async (req, res) => {
     // Create a document in Firestore with the media information
     const docData = {
       fileName: file.originalname,
+      storageFileName: fileName, // Store the actual storage filename (UUID-based)
       storageUrl: url,
       mimeType: file.mimetype,
       size: file.size,
@@ -320,24 +321,50 @@ router.delete('/:id', async (req, res) => {
     // Delete from Firebase Storage if URL exists
     if (mediaData.storageUrl && bucket) {
       try {
-        // Extract the full path from the storage URL for proper deletion
-        const url = new URL(mediaData.storageUrl);
-        const pathMatch = url.pathname.match(/\/o\/(.+?)\?/);
-        if (pathMatch) {
-          const fullPath = decodeURIComponent(pathMatch[1]);
+        // First try to use the storageFolder and storageFileName fields (most reliable)
+        if (mediaData.storageFolder && mediaData.storageFileName) {
+          const fullPath = `${mediaData.storageFolder}/${mediaData.storageFileName}`;
+          console.log('Attempting to delete file from path:', fullPath);
           await bucket.file(fullPath).delete();
+          console.log('File deleted successfully from storage');
         } else {
-          // Fallback to old method if URL format is different
-          const fileName = mediaData.storageUrl.split('/').pop().split('?')[0];
-          await bucket.file(fileName).delete();
+          // For older records without storageFileName, extract from URL
+          console.log('No storageFileName found, extracting from URL...');
+          const url = new URL(mediaData.storageUrl);
+          const pathMatch = url.pathname.match(/\/o\/(.+?)\?/);
+          if (pathMatch) {
+            const fullPath = decodeURIComponent(pathMatch[1]);
+            console.log('Attempting to delete file from URL path:', fullPath);
+            await bucket.file(fullPath).delete();
+            console.log('File deleted successfully from storage');
+          } else {
+            // Last resort: try to extract filename from URL
+            const fileName = mediaData.storageUrl.split('/').pop().split('?')[0];
+            console.log('Attempting to delete file by filename only:', fileName);
+            await bucket.file(fileName).delete();
+            console.log('File deleted successfully from storage');
+          }
         }
       } catch (storageError) {
-        console.log('Storage deletion error (continuing):', storageError.message);
+        console.error('Storage deletion error:', storageError);
+        
+        // If it's a 404 error, the file might already be deleted or never existed
+        if (storageError.code === 404) {
+          console.log('File not found in storage (404) - might have been already deleted or never existed');
+        } else {
+          console.log('Other storage error occurred:', storageError.message);
+        }
+        
+        // Don't fail the entire operation if storage deletion fails
+        console.log('Continuing with Firestore deletion despite storage error');
       }
+    } else {
+      console.log('No storage URL found or bucket not available, skipping storage deletion');
     }
 
     // Delete from Firestore
     await db.collection('media').doc(req.params.id).delete();
+    console.log('Document deleted from Firestore');
 
     res.json({
       success: true,
