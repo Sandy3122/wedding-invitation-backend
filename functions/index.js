@@ -1,4 +1,5 @@
-const functions = require('firebase-functions');
+const { onRequest } = require('firebase-functions/v2/https');
+const { setGlobalOptions } = require('firebase-functions/v2');
 const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
@@ -6,6 +7,9 @@ const multer = require('multer');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const cookieParser = require('cookie-parser');
+const os = require('os');
+const fs = require('fs');
+setGlobalOptions({ memoryMiB: 1024, timeoutSeconds: 540, maxInstances: 20 });
 
 // Load the Firebase service account key with error handling
 let serviceAccount;
@@ -61,10 +65,24 @@ db.collection('test').limit(1).get()
 
 // Configure Multer for file uploads
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, os.tmpdir()),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || '');
+      cb(null, `${uuidv4()}${ext}`);
+    }
+  }),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit for files
+    fileSize: 50 * 1024 * 1024, // 50MB limit for files
   },
+  fileFilter: (req, file, cb) => {
+    const allowed = [
+      'image/jpeg', 'image/png', 'image/webp', 'image/heic',
+      'video/mp4', 'video/quicktime', 'video/x-matroska'
+    ];
+    if (allowed.includes(file.mimetype)) return cb(null, true);
+    cb(new Error('Unsupported file type'));
+  }
 });
 
 const DEFAULT_COLLECTION = 'wedding-data';
@@ -111,16 +129,16 @@ app.post('/upload-media', upload.single('media'), async (req, res) => {
     const file = req.file;
     const fileExtension = path.extname(file.originalname);
     const fileName = `${uuidv4()}${fileExtension}`;
-    const fileRef = bucket.file(fileName);
-
-    // Upload the file to Firebase Storage
-    await fileRef.save(file.buffer, {
+    // Upload the file from disk to Firebase Storage to avoid buffering in memory
+    await bucket.upload(file.path, {
+      destination: fileName,
       metadata: {
         contentType: file.mimetype,
+        cacheControl: 'public, max-age=31536000, immutable',
       },
     });
 
-    const [url] = await fileRef.getSignedUrl({
+    const [url] = await bucket.file(fileName).getSignedUrl({
       action: 'read',
       expires: '03-09-2030', // Set an expiration date for the URL
     });
@@ -148,6 +166,13 @@ app.post('/upload-media', upload.single('media'), async (req, res) => {
       });
     }
     res.status(500).send('Error uploading media.');
+  } finally {
+    // Cleanup temp file if present
+    try {
+      if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+    } catch (_) {}
   }
 });
 
@@ -274,5 +299,5 @@ app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' });
 });
 
-// Export the Express app as a Firebase Function
-exports.api = functions.https.onRequest(app);
+// Export the Express app as a Firebase Function (Gen 2)
+exports.api = onRequest(app);

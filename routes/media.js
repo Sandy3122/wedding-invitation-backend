@@ -6,6 +6,13 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
 const ffmpeg = require('fluent-ffmpeg');
+function normalizeCategory(value) {
+  return (value || 'uncategorized')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+}
 
 const router = express.Router();
 
@@ -142,7 +149,7 @@ router.post('/upload', async (req, res) => {
                 const uploaderName = fields.uploaderName ? String(fields.uploaderName).trim() : '';
                 const uploaderPhone = fields.uploaderPhone ? String(fields.uploaderPhone).trim() : '';
                 const deviceId = fields.deviceId ? String(fields.deviceId).trim() : '';
-                const category = fields.category ? String(fields.category) : 'uncategorized';
+                const category = normalizeCategory(fields.category);
                 
                 // Determine the storage folder based on upload source and category
                 const storageFolder = getStorageFolder(deviceId, category);
@@ -421,7 +428,7 @@ router.put('/:id', async (req, res) => {
     if (fileName) updateData.fileName = fileName;
     if (description !== undefined) updateData.description = description;
     if (isApproved !== undefined) updateData.isApproved = isApproved;
-    if (category !== undefined) updateData.category = String(category);
+    if (category !== undefined) updateData.category = normalizeCategory(category);
 
     await db.collection('media').doc(req.params.id).update(updateData);
 

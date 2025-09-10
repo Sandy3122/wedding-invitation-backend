@@ -6,6 +6,30 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
 const ffmpeg = require('fluent-ffmpeg');
+let activeVideoJobs = 0;
+const MAX_CONCURRENT_VIDEO_JOBS = 2; // Limit per instance
+function acquireVideoSlot() {
+  return new Promise(resolve => {
+    const tryAcquire = () => {
+      if (activeVideoJobs < MAX_CONCURRENT_VIDEO_JOBS) {
+        activeVideoJobs += 1;
+        return resolve();
+      }
+      setTimeout(tryAcquire, 50);
+    };
+    tryAcquire();
+  });
+}
+function releaseVideoSlot() {
+  activeVideoJobs = Math.max(0, activeVideoJobs - 1);
+}
+function normalizeCategory(value) {
+  return (value || 'uncategorized')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+}
 
 const router = express.Router();
 
@@ -142,7 +166,7 @@ router.post('/upload', async (req, res) => {
                 const uploaderName = fields.uploaderName ? String(fields.uploaderName).trim() : '';
                 const uploaderPhone = fields.uploaderPhone ? String(fields.uploaderPhone).trim() : '';
                 const deviceId = fields.deviceId ? String(fields.deviceId).trim() : '';
-                const category = fields.category ? String(fields.category) : 'uncategorized';
+                const category = normalizeCategory(fields.category);
                 
                 // Determine the storage folder based on upload source and category
                 const storageFolder = getStorageFolder(deviceId, category);
@@ -167,26 +191,32 @@ router.post('/upload', async (req, res) => {
                     console.log('Compressing video...');
                     compressedPath = path.join(path.dirname(file.path), `compressed-${fileName.replace(fileExtension, '.mp4')}`);
                     
-                    await new Promise((resolve, reject) => {
-                        ffmpeg(file.path)
-                            .outputOptions([
-                                "-vf scale=w=1280:h=720:force_original_aspect_ratio=decrease",
-                                "-c:v libx264",
-                                "-preset fast",
-                                "-b:v 1500k",
-                                "-c:a aac",
-                                "-b:a 128k",
-                            ])
-                            .save(compressedPath)
-                            .on("end", () => {
-                                console.log('Video compression completed');
-                                resolve();
-                            })
-                            .on("error", (error) => {
-                                console.error('Video compression error:', error);
-                                reject(error);
-                            });
-                    });
+                    await acquireVideoSlot();
+                    try {
+                        await new Promise((resolve, reject) => {
+                            ffmpeg(file.path)
+                                .outputOptions([
+                                    "-vf scale=w=1280:h=720:force_original_aspect_ratio=decrease",
+                                    "-c:v libx264",
+                                    "-preset veryfast",
+                                    "-b:v 1200k",
+                                    "-threads 1",
+                                    "-c:a aac",
+                                    "-b:a 96k",
+                                ])
+                                .save(compressedPath)
+                                .on("end", () => {
+                                    console.log('Video compression completed');
+                                    resolve();
+                                })
+                                .on("error", (error) => {
+                                    console.error('Video compression error:', error);
+                                    reject(error);
+                                });
+                        });
+                    } finally {
+                        releaseVideoSlot();
+                    }
                     
                     uploadPath = compressedPath;
                     finalFileName = fileName.replace(fileExtension, '.mp4');
@@ -384,7 +414,7 @@ router.put('/:id', async (req, res) => {
     if (fileName) updateData.fileName = fileName;
     if (description !== undefined) updateData.description = description;
     if (isApproved !== undefined) updateData.isApproved = isApproved;
-    if (category !== undefined) updateData.category = String(category);
+    if (category !== undefined) updateData.category = normalizeCategory(category);
 
     await db.collection('media').doc(req.params.id).update(updateData);
 
