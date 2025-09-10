@@ -1,23 +1,17 @@
 const express = require('express');
-const multer = require('multer');
+const formidable = require('formidable-serverless');
 const { v4: uuidv4 } = require('uuid');
-const sharp = require('sharp');
 const admin = require('firebase-admin');
 const path = require('path');
+const fs = require('fs');
+const sharp = require('sharp');
+const ffmpeg = require('fluent-ffmpeg');
 
 const router = express.Router();
 
 // Helper functions to get Firebase instances
 const getDb = () => admin.firestore();
 const getBucket = () => admin.storage().bucket();
-
-// Configure multer for memory storage
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
-  },
-});
 
 // Helper function to determine folder structure based on upload source and category
 function getStorageFolder(deviceId, category) {
@@ -35,123 +29,274 @@ function getStorageFolder(deviceId, category) {
   return 'general-uploads';
 }
 
-// Upload media to Firebase Storage and save metadata to Firestore
-router.post('/upload', upload.single('media'), async (req, res) => {
-  try {
-    const db = getDb();
-    const bucket = getBucket();
-    
-    // Check if Firebase Storage is available
-    if (!bucket) {
-      return res.status(500).json({
-        success: false,
-        message: 'Firebase Storage is not configured. Please check your environment variables and Firebase setup.',
-        error: 'Storage bucket not available'
-      });
-    }
+// File upload helper function based on your working implementation
+async function uploadFile(file, folder, fileName, fileType) {
+    try {
+        console.log('File object:', file);
+        console.log('File path:', file.path);
 
-    // Check if a file was uploaded
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: 'No file uploaded'
-      });
-    }
+        if (!file.path) {
+            throw new Error("File path is undefined. Ensure the file is correctly parsed.");
+        }
 
-    const file = req.file;
-    const fileExtension = path.extname(file.originalname);
-    const fileName = `${uuidv4()}${fileExtension}`;
-    
-    // Gather uploader info from request body
-    const uploaderName = req.body && req.body.uploaderName ? String(req.body.uploaderName).trim() : '';
-    const uploaderPhone = req.body && req.body.uploaderPhone ? String(req.body.uploaderPhone).trim() : '';
-    const deviceId = req.body && req.body.deviceId ? String(req.body.deviceId).trim() : '';
-    const category = (req.body && req.body.category ? String(req.body.category) : 'uncategorized');
-    
-    // Determine the storage folder based on upload source and category
-    const storageFolder = getStorageFolder(deviceId, category);
-    const fullPath = `${storageFolder}/${fileName}`;
-    const fileRef = bucket.file(fullPath);
+        const filePath = `${folder}/${fileName}`;
 
-    // Upload the file to Firebase Storage
-    await fileRef.save(file.buffer, {
-      metadata: {
-        contentType: file.mimetype,
-        cacheControl: 'public, max-age=31536000, immutable',
-        metadata: {
-          'Content-Disposition': `inline; filename="${fileName}"`,
-        },
-      },
-    });
-
-    const [url] = await fileRef.getSignedUrl({
-      action: 'read',
-      expires: '03-09-2030', // Set an expiration date for the URL
-    });
-
-    // Upsert guest profile keyed by deviceId if provided
-    if (deviceId) {
-      const guestRef = db.collection('guests').doc(deviceId);
-      const guestSnap = await guestRef.get();
-      const now = new Date();
-      if (!guestSnap.exists) {
-        await guestRef.set({
-          deviceId,
-          name: uploaderName || 'Guest',
-          phoneNumber: uploaderPhone || '',
-          createdAt: now,
-          lastActive: now,
-          uploadCount: 1,
+        // Upload the file to Firebase Storage with appropriate metadata
+        const [uploadedFile] = await getBucket().upload(file.path, {
+            destination: filePath,
+            metadata: {
+                contentType: file.type,
+                cacheControl: 'public, max-age=31536000, immutable',
+                metadata: {
+                    // Set Content-Disposition to 'inline' to open in the browser
+                    'Content-Disposition': `inline; filename="${fileName}"`,
+                },
+            },
         });
-      } else {
-        const prev = guestSnap.data() || {};
-        await guestRef.set({
-          deviceId,
-          name: uploaderName || prev.name || 'Guest',
-          phoneNumber: uploaderPhone || prev.phoneNumber || '',
-          lastActive: now,
-          uploadCount: (prev.uploadCount || 0) + 1,
-          updatedAt: now,
-        }, { merge: true });
-      }
+
+        // Generate a signed URL for accessing the file
+        const [signedUrl] = await uploadedFile.getSignedUrl({
+            action: 'read',
+            expires: Date.now() + 20 * 365 * 24 * 60 * 60 * 1000, // 20 years expiration
+        });
+
+        console.log('File uploaded successfully:', signedUrl);
+        return signedUrl;
+    } catch (error) {
+        console.error("Error uploading file:", error);
+        throw new Error(`Error uploading file: ${error.message}`);
     }
+}
 
-    // Create a document in Firestore with the media information
-    const docData = {
-      fileName: file.originalname,
-      storageFileName: fileName, // Store the actual storage filename (UUID-based)
-      storageUrl: url,
-      mimeType: file.mimetype,
-      size: file.size,
-      uploadDate: new Date(),
-      isApproved: true,
-      likes: 0,
-      category,
-      storageFolder, // Add storage folder info for reference
-    };
-    if (uploaderName) docData.uploaderName = uploaderName;
-    if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
-    if (deviceId) docData.deviceId = deviceId;
+const MAX_FILE_SIZE_MB = 100;
+const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024;
 
-    const docRef = await db.collection('media').add(docData);
+// Upload media to Firebase Storage and save metadata to Firestore
+router.post('/upload', async (req, res) => {
+    try {
+        console.log('Starting media upload process...');
+        
+        const db = getDb();
+        const bucket = getBucket();
+        
+        // Check if Firebase Storage is available
+        if (!bucket) {
+            return res.status(500).json({
+                success: false,
+                message: 'Firebase Storage is not configured. Please check your environment variables and Firebase setup.',
+                error: 'Storage bucket not available'
+            });
+        }
 
-    res.status(200).json({
-      success: true,
-      message: 'Media uploaded successfully!',
-      data: {
-        downloadUrl: url,
-        docId: docRef.id,
-        storageFolder
-      }
-    });
-  } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error uploading media',
-      error: error.message
-    });
-  }
+        // Use formidable-serverless like in your working implementation
+        const form = new formidable.IncomingForm();
+        form.maxFileSize = MAX_FILE_SIZE;
+        form.multiples = false; // Single file upload
+
+        form.parse(req, async (err, fields, files) => {
+            if (err) {
+                if (err.message.includes("maxFileSize")) {
+                    return res.status(400).json({ 
+                        success: false,
+                        message: `File size limit exceeded (max ${MAX_FILE_SIZE_MB} MB)` 
+                    });
+                }
+                console.error("Error parsing form:", err);
+                return res.status(400).json({ 
+                    success: false,
+                    message: "Error parsing form data" 
+                });
+            }
+
+            console.log('Form parsed successfully');
+            console.log('Fields:', fields);
+            console.log('Files:', files);
+
+            // Check if a file was uploaded
+            if (!files.media) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No file uploaded with name "media"'
+                });
+            }
+
+            const file = Array.isArray(files.media) ? files.media[0] : files.media;
+            console.log('File details:', {
+                name: file.name,
+                type: file.type,
+                size: file.size,
+                path: file.path
+            });
+
+            // Variables for cleanup
+            let compressedPath = null;
+            let uploadPath = file.path;
+            let finalFileName = null;
+
+            try {
+                // Generate unique filename
+                const fileExtension = path.extname(file.name || '');
+                const fileName = `${uuidv4()}${fileExtension}`;
+
+                // Gather uploader info from form fields
+                const uploaderName = fields.uploaderName ? String(fields.uploaderName).trim() : '';
+                const uploaderPhone = fields.uploaderPhone ? String(fields.uploaderPhone).trim() : '';
+                const deviceId = fields.deviceId ? String(fields.deviceId).trim() : '';
+                const category = fields.category ? String(fields.category) : 'uncategorized';
+                
+                // Determine the storage folder based on upload source and category
+                const storageFolder = getStorageFolder(deviceId, category);
+
+                // Compression logic based on file type
+                console.log('Starting file compression check for type:', file.type);
+                
+                if (file.type && file.type.startsWith("image/")) {
+                    console.log('Compressing image...');
+                    compressedPath = path.join(path.dirname(file.path), `compressed-${fileName}`);
+                    
+                    await sharp(file.path)
+                        .resize({ width: 1920, height: 1920, fit: "inside" })
+                        .jpeg({ quality: 70 })
+                        .toFile(compressedPath);
+                    
+                    uploadPath = compressedPath;
+                    finalFileName = fileName.replace(fileExtension, '.jpg');
+                    console.log('Image compression completed');
+                    
+                } else if (file.type && file.type.startsWith("video/")) {
+                    console.log('Compressing video...');
+                    compressedPath = path.join(path.dirname(file.path), `compressed-${fileName.replace(fileExtension, '.mp4')}`);
+                    
+                    await new Promise((resolve, reject) => {
+                        ffmpeg(file.path)
+                            .outputOptions([
+                                "-vf scale=w=1280:h=720:force_original_aspect_ratio=decrease",
+                                "-c:v libx264",
+                                "-preset fast",
+                                "-b:v 1500k",
+                                "-c:a aac",
+                                "-b:a 128k",
+                            ])
+                            .save(compressedPath)
+                            .on("end", () => {
+                                console.log('Video compression completed');
+                                resolve();
+                            })
+                            .on("error", (error) => {
+                                console.error('Video compression error:', error);
+                                reject(error);
+                            });
+                    });
+                    
+                    uploadPath = compressedPath;
+                    finalFileName = fileName.replace(fileExtension, '.mp4');
+                    console.log('Video compression completed');
+                    
+                }
+                 else {
+                    console.log('No compression needed for file type:', file.type);
+                    uploadPath = file.path;
+                    finalFileName = fileName;
+                }
+
+                // Upload file using the working approach
+                const signedUrl = await uploadFile({ 
+                    ...file, 
+                    path: uploadPath 
+                }, storageFolder, finalFileName, file.type);
+
+                console.log('Saving to Firestore...');
+                // Upsert guest profile keyed by deviceId if provided
+                if (deviceId) {
+                    const guestRef = db.collection('guests').doc(deviceId);
+                    const guestSnap = await guestRef.get();
+                    const now = new Date();
+                    if (!guestSnap.exists) {
+                        await guestRef.set({
+                            deviceId,
+                            name: uploaderName || 'Guest',
+                            phoneNumber: uploaderPhone || '',
+                            createdAt: now,
+                            lastActive: now,
+                            uploadCount: 1,
+                        });
+                    } else {
+                        const prev = guestSnap.data() || {};
+                        await guestRef.set({
+                            deviceId,
+                            name: uploaderName || prev.name || 'Guest',
+                            phoneNumber: uploaderPhone || prev.phoneNumber || '',
+                            lastActive: now,
+                            uploadCount: (prev.uploadCount || 0) + 1,
+                            updatedAt: now,
+                        }, { merge: true });
+                    }
+                }
+
+                // Create a document in Firestore with the media information
+                const docData = {
+                    fileName: file.name || 'unknown',
+                    storageFileName: finalFileName, // Store the actual storage filename (UUID-based)
+                    storageUrl: signedUrl,
+                    mimeType: file.type || 'application/octet-stream',
+                    size: file.size,
+                    uploadDate: new Date(),
+                    isApproved: true,
+                    likes: 0,
+                    category,
+                    storageFolder, // Add storage folder info for reference
+                    compressed: compressedPath !== null, // Track if file was compressed
+                };
+                if (uploaderName) docData.uploaderName = uploaderName;
+                if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
+                if (deviceId) docData.deviceId = deviceId;
+
+                const docRef = await db.collection('media').add(docData);
+
+                console.log('Upload completed successfully');
+                res.status(200).json({
+                    success: true,
+                    message: 'Media uploaded successfully!',
+                    data: {
+                        downloadUrl: signedUrl,
+                        docId: docRef.id,
+                        storageFolder,
+                        compressed: compressedPath !== null
+                    }
+                });
+
+            } catch (uploadError) {
+                console.error('Upload error:', uploadError);
+                res.status(500).json({
+                    success: false,
+                    message: 'Error uploading media',
+                    error: uploadError.message
+                });
+            } finally {
+                // Clean up temporary files
+                try {
+                    if (file.path && fs.existsSync(file.path)) {
+                        fs.unlinkSync(file.path);
+                        console.log('Original temporary file cleaned up');
+                    }
+                    if (compressedPath && fs.existsSync(compressedPath)) {
+                        fs.unlinkSync(compressedPath);
+                        console.log('Compressed temporary file cleaned up');
+                    }
+                } catch (cleanupError) {
+                    console.log('Cleanup error (non-critical):', cleanupError.message);
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('General error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error processing upload request',
+            error: error.message
+        });
+    }
 });
 
 // Get all media

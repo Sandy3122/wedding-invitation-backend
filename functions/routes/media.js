@@ -4,6 +4,8 @@ const { v4: uuidv4 } = require('uuid');
 const admin = require('firebase-admin');
 const path = require('path');
 const fs = require('fs');
+const sharp = require('sharp');
+const ffmpeg = require('fluent-ffmpeg');
 
 const router = express.Router();
 
@@ -126,6 +128,11 @@ router.post('/upload', async (req, res) => {
                 path: file.path
             });
 
+            // Variables for cleanup
+            let compressedPath = null;
+            let uploadPath = file.path;
+            let finalFileName = null;
+
             try {
                 // Generate unique filename
                 const fileExtension = path.extname(file.name || '');
@@ -140,8 +147,62 @@ router.post('/upload', async (req, res) => {
                 // Determine the storage folder based on upload source and category
                 const storageFolder = getStorageFolder(deviceId, category);
 
+                // Compression logic based on file type
+                console.log('Starting file compression check for type:', file.type);
+                
+                if (file.type && file.type.startsWith("image/")) {
+                    console.log('Compressing image...');
+                    compressedPath = path.join(path.dirname(file.path), `compressed-${fileName}`);
+                    
+                    await sharp(file.path)
+                        .resize({ width: 1920, height: 1920, fit: "inside" })
+                        .jpeg({ quality: 75 })
+                        .toFile(compressedPath);
+                    
+                    uploadPath = compressedPath;
+                    finalFileName = fileName.replace(fileExtension, '.jpg');
+                    console.log('Image compression completed');
+                    
+                } else if (file.type && file.type.startsWith("video/")) {
+                    console.log('Compressing video...');
+                    compressedPath = path.join(path.dirname(file.path), `compressed-${fileName.replace(fileExtension, '.mp4')}`);
+                    
+                    await new Promise((resolve, reject) => {
+                        ffmpeg(file.path)
+                            .outputOptions([
+                                "-vf scale=w=1280:h=720:force_original_aspect_ratio=decrease",
+                                "-c:v libx264",
+                                "-preset fast",
+                                "-b:v 1500k",
+                                "-c:a aac",
+                                "-b:a 128k",
+                            ])
+                            .save(compressedPath)
+                            .on("end", () => {
+                                console.log('Video compression completed');
+                                resolve();
+                            })
+                            .on("error", (error) => {
+                                console.error('Video compression error:', error);
+                                reject(error);
+                            });
+                    });
+                    
+                    uploadPath = compressedPath;
+                    finalFileName = fileName.replace(fileExtension, '.mp4');
+                    console.log('Video compression completed');
+                    
+                } else {
+                    console.log('No compression needed for file type:', file.type);
+                    uploadPath = file.path;
+                    finalFileName = fileName;
+                }
+
                 // Upload file using the working approach
-                const signedUrl = await uploadFile(file, storageFolder, fileName, file.type);
+                const signedUrl = await uploadFile({ 
+                    ...file, 
+                    path: uploadPath 
+                }, storageFolder, finalFileName, file.type);
 
                 console.log('Saving to Firestore...');
                 // Upsert guest profile keyed by deviceId if provided
@@ -174,7 +235,7 @@ router.post('/upload', async (req, res) => {
                 // Create a document in Firestore with the media information
                 const docData = {
                     fileName: file.name || 'unknown',
-                    storageFileName: fileName, // Store the actual storage filename (UUID-based)
+                    storageFileName: finalFileName, // Store the actual storage filename (UUID-based)
                     storageUrl: signedUrl,
                     mimeType: file.type || 'application/octet-stream',
                     size: file.size,
@@ -183,6 +244,7 @@ router.post('/upload', async (req, res) => {
                     likes: 0,
                     category,
                     storageFolder, // Add storage folder info for reference
+                    compressed: compressedPath !== null, // Track if file was compressed
                 };
                 if (uploaderName) docData.uploaderName = uploaderName;
                 if (uploaderPhone) docData.uploaderPhone = uploaderPhone;
@@ -197,19 +259,10 @@ router.post('/upload', async (req, res) => {
                     data: {
                         downloadUrl: signedUrl,
                         docId: docRef.id,
-                        storageFolder
+                        storageFolder,
+                        compressed: compressedPath !== null
                     }
                 });
-
-                // Clean up temporary file
-                try {
-                    if (file.path && fs.existsSync(file.path)) {
-                        fs.unlinkSync(file.path);
-                        console.log('Temporary file cleaned up');
-                    }
-                } catch (cleanupError) {
-                    console.log('Cleanup error (non-critical):', cleanupError.message);
-                }
 
             } catch (uploadError) {
                 console.error('Upload error:', uploadError);
@@ -218,6 +271,20 @@ router.post('/upload', async (req, res) => {
                     message: 'Error uploading media',
                     error: uploadError.message
                 });
+            } finally {
+                // Clean up temporary files
+                try {
+                    if (file.path && fs.existsSync(file.path)) {
+                        fs.unlinkSync(file.path);
+                        console.log('Original temporary file cleaned up');
+                    }
+                    if (compressedPath && fs.existsSync(compressedPath)) {
+                        fs.unlinkSync(compressedPath);
+                        console.log('Compressed temporary file cleaned up');
+                    }
+                } catch (cleanupError) {
+                    console.log('Cleanup error (non-critical):', cleanupError.message);
+                }
             }
         });
 
