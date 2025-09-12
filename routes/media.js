@@ -36,6 +36,91 @@ function getStorageFolder(deviceId, category) {
   return 'general-uploads';
 }
 
+// Robust video processing function with fallback mechanisms
+async function processVideoWithFallbacks(inputPath, outputPath) {
+    const strategies = [
+        // Strategy 1: Basic conversion with flexible scaling
+        {
+            name: "basic",
+            options: [
+                "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:flags=lanczos",
+                "-c:v", "libx264",
+                "-preset", "medium", 
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                "-pix_fmt", "yuv420p"
+            ]
+        },
+        // Strategy 2: Minimal processing (fallback)
+        {
+            name: "minimal", 
+            options: [
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "28",
+                "-c:a", "copy",
+                "-movflags", "+faststart"
+            ]
+        },
+        // Strategy 3: Direct copy (last resort)
+        {
+            name: "copy",
+            options: ["-c", "copy"]
+        }
+    ];
+
+    for (const strategy of strategies) {
+        try {
+            console.log('Attempting video processing with strategy: ' + strategy.name);
+            
+            await new Promise((resolve, reject) => {
+                const command = ffmpeg(inputPath)
+                    .outputOptions(strategy.options)
+                    .save(outputPath)
+                    .on("start", (commandLine) => {
+                        console.log('FFmpeg command: ' + commandLine);
+                    })
+                    .on("progress", (progress) => {
+                        if (progress.percent) {
+                            console.log('Processing: ' + Math.round(progress.percent) + '% done');
+                        }
+                    })
+                    .on("end", () => {
+                        console.log('Video processing completed with strategy: ' + strategy.name);
+                        resolve();
+                    })
+                    .on("error", (error) => {
+                        console.error('Strategy ' + strategy.name + ' failed:', error.message);
+                        reject(error);
+                    });
+            });
+            
+            // If we get here, the strategy worked
+            return strategy.name;
+            
+        } catch (error) {
+            console.warn('Strategy ' + strategy.name + ' failed, trying next strategy...');
+            
+            // Clean up failed output file
+            try {
+                if (fs.existsSync(outputPath)) {
+                    fs.unlinkSync(outputPath);
+                }
+            } catch (cleanupError) {
+                console.warn('Could not clean up failed output file:', cleanupError.message);
+            }
+            
+            // If this was the last strategy, rethrow the error
+            if (strategy === strategies[strategies.length - 1]) {
+                throw error;
+            }
+        }
+    }
+}
+
+
 // File upload helper function based on your working implementation
 async function uploadFile(file, folder, fileName, fileType) {
     try {
@@ -170,35 +255,27 @@ router.post('/upload', async (req, res) => {
                     finalFileName = fileName.replace(fileExtension, '.jpg');
                     console.log('Image compression completed');
                     
-                } else if (file.type && file.type.startsWith("video/")) {
+                                } else if (file.type && file.type.startsWith("video/")) {
                     console.log('Compressing video...');
                     compressedPath = path.join(path.dirname(file.path), `compressed-${fileName.replace(fileExtension, '.mp4')}`);
                     
-                    await new Promise((resolve, reject) => {
-                        ffmpeg(file.path)
-                            .outputOptions([
-                                "-vf scale=w=1280:h=720:force_original_aspect_ratio=decrease",
-                                "-c:v libx264",
-                                "-preset fast",
-                                "-b:v 1500k",
-                                "-c:a aac",
-                                "-b:a 128k",
-                            ])
-                            .save(compressedPath)
-                            .on("end", () => {
-                                console.log('Video compression completed');
-                                resolve();
-                            })
-                            .on("error", (error) => {
-                                console.error('Video compression error:', error);
-                                reject(error);
-                            });
-                    });
-                    
-                    uploadPath = compressedPath;
-                    finalFileName = fileName.replace(fileExtension, '.mp4');
-                    console.log('Video compression completed');
-                    
+                    try {
+                        // Use robust video processing with fallbacks
+                        const strategy = await processVideoWithFallbacks(file.path, compressedPath);
+                        console.log(`Video successfully processed using strategy: ${strategy}`);
+                        
+                        uploadPath = compressedPath;
+                        finalFileName = fileName.replace(fileExtension, '.mp4');
+                        console.log('Video compression completed');
+                        
+                    } catch (error) {
+                        console.error('All video processing strategies failed:', error);
+                        console.log('Uploading original video file without compression...');
+                        
+                        // Fallback: upload original file without compression
+                        uploadPath = file.path;
+                        finalFileName = fileName;
+                    }
                 }
                  else {
                     console.log('No compression needed for file type:', file.type);
