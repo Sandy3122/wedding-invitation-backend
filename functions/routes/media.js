@@ -53,35 +53,78 @@ function getStorageFolder(deviceId, category) {
   return 'general-uploads';
 }
 
-// Robust video processing function with fallback mechanisms
+// Quality-focused video processing function with balanced compression
 async function processVideoWithFallbacks(inputPath, outputPath) {
     const strategies = [
-        // Strategy 1: Basic conversion with flexible scaling
+        // Strategy 1: High quality compression (good balance)
         {
-            name: "basic",
+            name: "high_quality",
             options: [
                 "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:flags=lanczos",
                 "-c:v", "libx264",
                 "-preset", "medium", 
-                "-crf", "23",
+                "-crf", "23",  // Good quality (visually lossless)
+                "-maxrate", "2000k",  // Higher bitrate for quality
+                "-bufsize", "4000k",  // Larger buffer
                 "-c:a", "aac",
-                "-b:a", "128k",
+                "-b:a", "128k",  // Good audio quality
+                "-ac", "2",  // Stereo
                 "-movflags", "+faststart",
                 "-pix_fmt", "yuv420p"
             ]
         },
-        // Strategy 2: Minimal processing (fallback)
+        // Strategy 2: Balanced quality and compression
         {
-            name: "minimal", 
+            name: "balanced", 
             options: [
+                "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:flags=lanczos",
                 "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "28",
-                "-c:a", "copy",
-                "-movflags", "+faststart"
+                "-preset", "fast",
+                "-crf", "25",  // Slightly more compression but still good quality
+                "-maxrate", "1500k",  // Moderate bitrate
+                "-bufsize", "3000k",
+                "-c:a", "aac",
+                "-b:a", "96k",  // Standard audio quality
+                "-ac", "2",
+                "-movflags", "+faststart",
+                "-pix_fmt", "yuv420p"
             ]
         },
-        // Strategy 3: Direct copy (last resort)
+        // Strategy 3: Moderate compression (more size reduction)
+        {
+            name: "moderate",
+            options: [
+                "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:flags=lanczos",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "27",  // More compression but acceptable quality
+                "-maxrate", "1200k",  // Lower bitrate
+                "-bufsize", "2400k",
+                "-c:a", "aac",
+                "-b:a", "80k",  // Lower audio but still good
+                "-ac", "2",
+                "-movflags", "+faststart",
+                "-pix_fmt", "yuv420p"
+            ]
+        },
+        // Strategy 4: Aggressive compression (last resort before copy)
+        {
+            name: "aggressive",
+            options: [
+                "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:flags=lanczos",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "30",  // High compression
+                "-maxrate", "1000k",  // Low bitrate
+                "-bufsize", "2000k",
+                "-c:a", "aac",
+                "-b:a", "64k",  // Lower audio
+                "-ac", "2",
+                "-movflags", "+faststart",
+                "-pix_fmt", "yuv420p"
+            ]
+        },
+        // Strategy 5: Direct copy (only if all compression fails)
         {
             name: "copy",
             options: ["-c", "copy"]
@@ -114,8 +157,30 @@ async function processVideoWithFallbacks(inputPath, outputPath) {
                     });
             });
             
-            // If we get here, the strategy worked
-            return strategy.name;
+            // Check if file size was actually reduced
+            const originalSize = fs.statSync(inputPath).size;
+            const compressedSize = fs.statSync(outputPath).size;
+            const compressionRatio = ((originalSize - compressedSize) / originalSize * 100).toFixed(2);
+            
+            console.log('File size comparison:');
+            console.log('  Original: ' + (originalSize / 1024 / 1024).toFixed(2) + ' MB');
+            console.log('  Compressed: ' + (compressedSize / 1024 / 1024).toFixed(2) + ' MB');
+            console.log('  Compression: ' + compressionRatio + '%');
+            
+            // Accept the result if:
+            // 1. File size was reduced by at least 10%, OR
+            // 2. This is the copy strategy (last resort)
+            const minimumCompression = 10; // 10% minimum compression
+            const actualCompression = ((originalSize - compressedSize) / originalSize * 100);
+            
+            if (actualCompression >= minimumCompression || strategy.name === 'copy') {
+                console.log('Strategy ' + strategy.name + ' accepted. Compression: ' + actualCompression.toFixed(2) + '%');
+                return strategy.name;
+            } else {
+                console.warn('Compression too low (' + actualCompression.toFixed(2) + '%), trying next strategy...');
+                fs.unlinkSync(outputPath);
+                continue;
+            }
             
         } catch (error) {
             console.warn('Strategy ' + strategy.name + ' failed, trying next strategy...');
