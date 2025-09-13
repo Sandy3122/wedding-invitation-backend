@@ -95,6 +95,184 @@ async function uploadFile(file, folder, fileName, fileType) {
 const MAX_FILE_SIZE_MB = 50;
 const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024;
 
+// // Enhanced video compression function with better error handling
+// async function compressVideo(inputPath, outputPath) {
+//     return new Promise((resolve, reject) => {
+//         console.log('Starting video compression...');
+        
+//         // First, get video metadata to validate input
+//         ffmpeg.ffprobe(inputPath, (err, metadata) => {
+//             if (err) {
+//                 console.error('Error getting video metadata:', err);
+//                 return reject(new Error(`Invalid video file: ${err.message}`));
+//             }
+            
+//             const videoStream = metadata.streams.find(stream => stream.codec_type === 'video');
+//             if (!videoStream) {
+//                 return reject(new Error('No video stream found in file'));
+//             }
+            
+//             console.log('Video metadata:', {
+//                 width: videoStream.width,
+//                 height: videoStream.height,
+//                 codec: videoStream.codec_name,
+//                 duration: metadata.format.duration
+//             });
+            
+//             // Check if video is too small or has unusual dimensions (more permissive)
+//             if (videoStream.width < 50 || videoStream.height < 50) {
+//                 console.log('Video too small, skipping compression');
+//                 return resolve(false); // Skip compression for very small videos
+//             }
+            
+//             // Calculate appropriate bitrate based on resolution
+//             let targetBitrate = '800k';
+//             const area = videoStream.width * videoStream.height;
+//             if (area > 1920 * 1080) {
+//                 targetBitrate = '1000k';
+//             } else if (area > 1280 * 720) {
+//                 targetBitrate = '800k';
+//             } else {
+//                 targetBitrate = '600k';
+//             }
+            
+//             // Determine if video is portrait or landscape and set appropriate scaling
+//             const isPortrait = videoStream.height > videoStream.width;
+//             let scaleFilter;
+
+//             if (isPortrait) {
+//               // Portrait: scale height to 720, maintain aspect ratio, force even dimensions
+//               scaleFilter = 'scale=-2:720:force_original_aspect_ratio=decrease';
+//               console.log('Portrait video detected, using portrait scaling');
+//             } else {
+//               // Landscape: scale width to 1280, maintain aspect ratio, force even dimensions
+//               scaleFilter = 'scale=1280:-2:force_original_aspect_ratio=decrease';
+//               console.log('Landscape video detected, using landscape scaling');
+//             }
+            
+//             console.log('Using target bitrate:', targetBitrate);
+//             console.log('Using scale filter:', scaleFilter);
+//             console.log('Proceeding with video compression...');
+            
+//             // Improved compression parameters that work for both orientations
+//             ffmpeg(inputPath)
+//                 .outputOptions([
+//                     `-vf ${scaleFilter}`,
+//                     "-c:v libx264",
+//                     "-preset medium",
+//                     "-crf 28",
+//                     "-maxrate " + targetBitrate,
+//                     "-bufsize " + (parseInt(targetBitrate) * 2) + "k",
+//                     "-c:a aac",
+//                     "-b:a 128k",
+//                     "-ac 2",
+//                     "-movflags +faststart",
+//                     "-pix_fmt yuv420p"
+//                 ])
+//                 .output(outputPath)
+//                 .on("start", (commandLine) => {
+//                     console.log('FFmpeg command:', commandLine);
+//                 })
+//                 .on("progress", (progress) => {
+//                     console.log('Processing: ' + progress.percent + '% done');
+//                 })
+//                 .on("end", () => {
+//                     console.log('Video compression completed successfully');
+//                     resolve(true);
+//                 })
+//                 .on("error", (error) => {
+//                     console.error('Video compression error:', error);
+//                     reject(new Error(`Video compression failed: ${error.message}`));
+//                 })
+//                 .run();
+//         });
+//     });
+// }
+
+
+// Whatsapp like compression
+// WhatsApp-style video compression
+async function compressVideo(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    console.log('Starting video compression...');
+
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) {
+        console.error('Error getting video metadata:', err);
+        return reject(new Error(`Invalid video file: ${err.message}`));
+      }
+
+      const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+      if (!videoStream) {
+        return reject(new Error('No video stream found in file'));
+      }
+
+      console.log('Video metadata:', {
+        width: videoStream.width,
+        height: videoStream.height,
+        codec: videoStream.codec_name,
+        duration: metadata.format.duration
+      });
+
+      // WhatsApp-like scaling:
+      // - Portrait → max height 720px
+      // - Landscape → max width 720px
+      // Always keep even dimensions (-2)
+      let scaleFilter;
+      if (videoStream.height > videoStream.width) {
+        scaleFilter = 'scale=-2:720:force_original_aspect_ratio=decrease';
+        console.log('Portrait video detected, scaling height to 720px');
+      } else {
+        scaleFilter = 'scale=720:-2:force_original_aspect_ratio=decrease';
+        console.log('Landscape video detected, scaling width to 720px');
+      }
+
+      // Target bitrate depending on resolution
+      const area = videoStream.width * videoStream.height;
+      let targetBitrate = '700k';
+      if (area > 1280 * 720) {
+        targetBitrate = '900k';
+      } else if (area < 640 * 480) {
+        targetBitrate = '500k';
+      }
+
+      console.log('Using target bitrate:', targetBitrate);
+      console.log('Using scale filter:', scaleFilter);
+      console.log('Proceeding with video compression...');
+
+      ffmpeg(inputPath)
+        .outputOptions([
+          `-vf ${scaleFilter}`,
+          "-c:v libx264",
+          "-preset veryfast",      // speed + size balance
+          "-crf 30",               // higher CRF = smaller size
+          "-maxrate " + targetBitrate,
+          "-bufsize " + (parseInt(targetBitrate) * 2) + "k",
+          "-c:a aac",
+          "-b:a 96k",              // compress audio aggressively
+          "-ac 2",
+          "-movflags +faststart",
+          "-pix_fmt yuv420p"
+        ])
+        .output(outputPath)
+        .on("start", (cmd) => console.log("FFmpeg command:", cmd))
+        .on("progress", (progress) => {
+          console.log("Processing: " + progress.percent + "% done");
+        })
+        .on("end", () => {
+          console.log("Video compression completed successfully");
+          resolve(true);
+        })
+        .on("error", (error) => {
+          console.error("Video compression error:", error);
+          reject(new Error(`Video compression failed: ${error.message}`));
+        })
+        .run();
+    });
+  });
+}
+
+
 // Upload media to Firebase Storage and save metadata to Firestore
 router.post('/upload', async (req, res) => {
     try {
@@ -193,34 +371,26 @@ router.post('/upload', async (req, res) => {
                     
                     await acquireVideoSlot();
                     try {
-                        await new Promise((resolve, reject) => {
-                            ffmpeg(file.path)
-                                .outputOptions([
-                                    "-vf scale=w=1280:h=720:force_original_aspect_ratio=decrease",
-                                    "-c:v libx264",
-                                    "-preset veryfast",
-                                    "-b:v 1200k",
-                                    "-threads 1",
-                                    "-c:a aac",
-                                    "-b:a 96k",
-                                ])
-                                .save(compressedPath)
-                                .on("end", () => {
-                                    console.log('Video compression completed');
-                                    resolve();
-                                })
-                                .on("error", (error) => {
-                                    console.error('Video compression error:', error);
-                                    reject(error);
-                                });
-                        });
+                        const compressionSuccess = await compressVideo(file.path, compressedPath);
+                        
+                        if (compressionSuccess) {
+                            uploadPath = compressedPath;
+                            finalFileName = fileName.replace(fileExtension, '.mp4');
+                            console.log('Video compression completed successfully');
+                        } else {
+                            // If compression was skipped (e.g., video too small), use original
+                            console.log('Video compression skipped, using original file');
+                            uploadPath = file.path;
+                            finalFileName = fileName;
+                        }
+                    } catch (compressionError) {
+                        console.error('Video compression failed, using original file:', compressionError.message);
+                        // Fallback to original file if compression fails
+                        uploadPath = file.path;
+                        finalFileName = fileName;
                     } finally {
                         releaseVideoSlot();
                     }
-                    
-                    uploadPath = compressedPath;
-                    finalFileName = fileName.replace(fileExtension, '.mp4');
-                    console.log('Video compression completed');
                     
                 } else {
                     console.log('No compression needed for file type:', file.type);
